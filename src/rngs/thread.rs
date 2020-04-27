@@ -8,8 +8,8 @@
 
 //! Thread-local random number generator
 
-use core::cell::UnsafeCell;
-use core::ptr::NonNull;
+use core::cell::RefCell;
+use std::rc::{Rc, Weak};
 
 use super::std::Core;
 use crate::rngs::adapter::ReseedingRng;
@@ -53,20 +53,19 @@ const THREAD_RNG_RESEED_THRESHOLD: u64 = 1024 * 64;
 ///
 /// [`ReseedingRng`]: crate::rngs::adapter::ReseedingRng
 /// [`StdRng`]: crate::rngs::StdRng
-#[derive(Copy, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct ThreadRng {
-    // inner raw pointer implies type is neither Send nor Sync
-    rng: NonNull<ReseedingRng<Core, OsRng>>,
+    rng: Weak<RefCell<ReseedingRng<Core, OsRng>>>,
 }
 
 thread_local!(
-    static THREAD_RNG_KEY: UnsafeCell<ReseedingRng<Core, OsRng>> = {
+    static THREAD_RNG_KEY: Rc<RefCell<ReseedingRng<Core, OsRng>>> = {
         let r = Core::from_rng(OsRng).unwrap_or_else(|err|
                 panic!("could not initialize thread_rng: {}", err));
         let rng = ReseedingRng::new(r,
                                     THREAD_RNG_RESEED_THRESHOLD,
                                     OsRng);
-        UnsafeCell::new(rng)
+        Rc::new(RefCell::new(rng))
     }
 );
 
@@ -78,9 +77,9 @@ thread_local!(
 ///
 /// For more information see [`ThreadRng`].
 pub fn thread_rng() -> ThreadRng {
-    let raw = THREAD_RNG_KEY.with(|t| t.get());
-    let nn = NonNull::new(raw).unwrap();
-    ThreadRng { rng: nn }
+    ThreadRng {
+        rng: THREAD_RNG_KEY.with(|rng| Rc::downgrade(rng)),
+    }
 }
 
 impl Default for ThreadRng {
@@ -92,20 +91,22 @@ impl Default for ThreadRng {
 impl RngCore for ThreadRng {
     #[inline(always)]
     fn next_u32(&mut self) -> u32 {
-        unsafe { self.rng.as_mut().next_u32() }
+        self.rng.upgrade().unwrap().borrow_mut().next_u32()
     }
 
     #[inline(always)]
     fn next_u64(&mut self) -> u64 {
-        unsafe { self.rng.as_mut().next_u64() }
+        self.rng.upgrade().unwrap().borrow_mut().next_u64()
     }
 
+    #[inline(always)]
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        unsafe { self.rng.as_mut().fill_bytes(dest) }
+        self.rng.upgrade().unwrap().borrow_mut().fill_bytes(dest)
     }
 
+    #[inline(always)]
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        unsafe { self.rng.as_mut().try_fill_bytes(dest) }
+        self.rng.upgrade().unwrap().borrow_mut().try_fill_bytes(dest)
     }
 }
 
