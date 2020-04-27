@@ -83,6 +83,13 @@ pub fn thread_rng() -> ThreadRng {
     ThreadRng { rng: nn }
 }
 
+impl ThreadRng {
+    #[inline(always)]
+    fn rng(&mut self) -> &mut ReseedingRng<Core, OsRng> {
+        unsafe { self.rng.as_mut() }
+    }
+}
+
 impl Default for ThreadRng {
     fn default() -> ThreadRng {
         crate::prelude::thread_rng()
@@ -92,20 +99,22 @@ impl Default for ThreadRng {
 impl RngCore for ThreadRng {
     #[inline(always)]
     fn next_u32(&mut self) -> u32 {
-        unsafe { self.rng.as_mut().next_u32() }
+        self.rng().next_u32()
     }
 
     #[inline(always)]
     fn next_u64(&mut self) -> u64 {
-        unsafe { self.rng.as_mut().next_u64() }
+        self.rng().next_u64()
     }
 
+    #[inline(always)]
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        unsafe { self.rng.as_mut().fill_bytes(dest) }
+        self.rng().fill_bytes(dest)
     }
 
+    #[inline(always)]
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        unsafe { self.rng.as_mut().try_fill_bytes(dest) }
+        self.rng().try_fill_bytes(dest)
     }
 }
 
