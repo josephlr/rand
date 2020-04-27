@@ -53,20 +53,32 @@ const THREAD_RNG_RESEED_THRESHOLD: u64 = 1024 * 64;
 ///
 /// [`ReseedingRng`]: crate::rngs::adapter::ReseedingRng
 /// [`StdRng`]: crate::rngs::StdRng
-#[derive(Copy, Clone, Debug)]
+#[derive(Debug)]
 pub struct ThreadRng {
-    // inner raw pointer implies type is neither Send nor Sync
-    rng: NonNull<ReseedingRng<Core, OsRng>>,
+    rng: NonNull<RngKey>,
+}
+
+struct RngKey {
+    rng: ReseedingRng<Core, OsRng>,
+    count: usize,
+}
+
+impl Drop for RngKey {
+    fn drop(&mut self) {
+        if self.count != 0 {
+            panic!("thread_local RNG dropped with outstanding references")
+        }
+    }
 }
 
 thread_local!(
-    static THREAD_RNG_KEY: UnsafeCell<ReseedingRng<Core, OsRng>> = {
+    static THREAD_RNG_KEY: UnsafeCell<RngKey> = {
         let r = Core::from_rng(OsRng).unwrap_or_else(|err|
                 panic!("could not initialize thread_rng: {}", err));
         let rng = ReseedingRng::new(r,
                                     THREAD_RNG_RESEED_THRESHOLD,
                                     OsRng);
-        UnsafeCell::new(rng)
+        UnsafeCell::new(RngKey{rng, count: 0})
     }
 );
 
@@ -79,8 +91,22 @@ thread_local!(
 /// For more information see [`ThreadRng`].
 pub fn thread_rng() -> ThreadRng {
     let raw = THREAD_RNG_KEY.with(|t| t.get());
-    let nn = NonNull::new(raw).unwrap();
-    ThreadRng { rng: nn }
+    let mut rng = NonNull::new(raw).unwrap();
+    unsafe { rng.as_mut() }.count += 1;
+    ThreadRng { rng }
+}
+
+impl ThreadRng {
+    #[inline(always)]
+    fn rng(&mut self) -> &mut ReseedingRng<Core, OsRng> {
+        unsafe { &mut self.rng.as_mut().rng }
+    }
+}
+
+impl Drop for ThreadRng {
+    fn drop(&mut self) {
+        unsafe { self.rng.as_mut()}.count -= 1;
+    }
 }
 
 impl Default for ThreadRng {
@@ -92,20 +118,22 @@ impl Default for ThreadRng {
 impl RngCore for ThreadRng {
     #[inline(always)]
     fn next_u32(&mut self) -> u32 {
-        unsafe { self.rng.as_mut().next_u32() }
+        self.rng().next_u32()
     }
 
     #[inline(always)]
     fn next_u64(&mut self) -> u64 {
-        unsafe { self.rng.as_mut().next_u64() }
+        self.rng().next_u64()
     }
 
+    #[inline(always)]
     fn fill_bytes(&mut self, dest: &mut [u8]) {
-        unsafe { self.rng.as_mut().fill_bytes(dest) }
+        self.rng().fill_bytes(dest)
     }
 
+    #[inline(always)]
     fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
-        unsafe { self.rng.as_mut().try_fill_bytes(dest) }
+        self.rng().try_fill_bytes(dest)
     }
 }
 
